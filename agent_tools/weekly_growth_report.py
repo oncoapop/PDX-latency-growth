@@ -2,9 +2,15 @@
 """Weekly living-mouse tumour growth report.
 
 Plots tumour growth, grouped by cage, for every mouse still in rotation
-(a measurement within the last LIVING_WINDOW_DAYS), and flags any living
-mouse that has never reached NO_TAKE_THRESHOLD_MM3 more than
-NO_TAKE_FLAG_DAYS after surgery.
+(a measurement within the last LIVING_WINDOW_DAYS), flags any living mouse
+that has never reached NO_TAKE_THRESHOLD_MM3 more than NO_TAKE_FLAG_DAYS
+after surgery, and plots the current harvest-date projection (500/1000 mm3)
+for every actively-growing mouse already above the projection volume floor.
+
+The harvest-date projection reuses plot_tumour_growth_by_cage.py's own
+build_pdx_projections/plot_pdx_projections, fed from the already-extracted
+normalized/growth_measurements.csv rather than a fresh scan of the raw
+workbooks — orders of magnitude faster for a 1,000+ file archive.
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -24,6 +31,9 @@ matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from plot_tumour_growth_by_cage import build_pdx_projections, plot_pdx_projections  # noqa: E402
 
 LIVING_WINDOW_DAYS = 10
 NO_TAKE_THRESHOLD_MM3 = 100.0
@@ -105,6 +115,39 @@ def plot_living_mice(df: pd.DataFrame, status: pd.DataFrame, output_png: Path, a
     plt.close(fig)
 
 
+def load_as_raw_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """Reshape the normalized schema into the columns
+    build_pdx_projections/plot_pdx_projections expect."""
+    raw = df.copy()
+    raw["tumour_site"] = raw["mouse_id"].str.rsplit(" ", n=1).str[1].fillna("")
+    raw["tumour_model"] = raw["sa_id"].fillna("")
+    raw["sheet"] = "normalized"
+    raw["date"] = raw["measurement_date"]
+    return raw[["date", "cage", "sheet", "mouse_id", "tumour_site", "tumour_model", "tumour_volume_mm3"]]
+
+
+def write_harvest_projection(
+    df: pd.DataFrame, output_dir: Path, as_of: pd.Timestamp, generated_date: str,
+) -> tuple[Path | None, Path | None, int]:
+    raw = load_as_raw_schema(df)
+    first_record_date = raw["date"].min()
+    observed, summary = build_pdx_projections(raw)
+    if summary.empty:
+        return None, None, 0
+
+    summary["analysis_generated_date"] = generated_date
+    summary["data_through_date"] = as_of.date().isoformat()
+    csv_path = output_dir / "pdx_growth_projection_latest.csv"
+    png_path = output_dir / "pdx_growth_projection_latest.png"
+    pdf_path = output_dir / "pdx_growth_projection_latest.pdf"
+    summary.to_csv(csv_path, index=False)
+    plot_pdx_projections(
+        observed, summary, png_path, pdf_path,
+        generated_date, as_of.date().isoformat(), first_record_date,
+    )
+    return png_path, csv_path, len(summary)
+
+
 def write_if_changed(path: Path, content: str) -> bool:
     """Skip the write when content is unchanged, so an unchanged file's mtime
     doesn't look stale to any later staleness check."""
@@ -134,14 +177,19 @@ def main() -> None:
 
     df = load_measurements(workspace)
     as_of = df["measurement_date"].max()
+    generated_date = pd.Timestamp.today().date().isoformat()
     status = compute_status(df, as_of)
 
-    png_path = output_dir / f"living_mice_growth_{as_of:%Y-%m-%d}.png"
+    png_path = output_dir / "living_mice_growth_latest.png"
     plot_living_mice(df, status, png_path, as_of)
 
     flagged = status[status["no_take_flag"]].sort_values("days_since_surgery", ascending=False)
     flagged_csv = output_dir / "flagged_no_take_latest.csv"
     write_if_changed(flagged_csv, flagged.to_csv(index=False))
+
+    projection_png, projection_csv, n_projected = write_harvest_projection(
+        df, output_dir, as_of, generated_date
+    )
 
     living = status[status["is_living"]]
     print(f"As of {as_of:%Y-%m-%d}: {len(living)} living mice across {living['cage'].nunique()} cages")
@@ -151,6 +199,12 @@ def main() -> None:
     )
     print(f"Wrote {png_path}")
     print(f"Wrote {flagged_csv}")
+    if projection_png is not None:
+        print(f"Projected {n_projected} actively-growing mouse/site traces above 200 mm3")
+        print(f"Wrote {projection_png}")
+        print(f"Wrote {projection_csv}")
+    else:
+        print("No currently-growing SA* mouse above the projection volume threshold found.")
 
 
 if __name__ == "__main__":
