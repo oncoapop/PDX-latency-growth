@@ -8,6 +8,10 @@ venv/
 outputs/
 tumour_growth_plots/
 
+# Per-workspace pipeline caches (agent_tools/file_cache.py, atlas_client.py) —
+# derived scratch data, safe to delete, never versioned
+.cache/
+
 # Machine-local configuration
 config.local.yml
 *.local.yml

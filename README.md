@@ -1,6 +1,10 @@
-# PDX Growth Tracking
+# PDX Latency & Growth Tracking
 
-Reusable analysis script for PDX mouse tumour-volume Excel workbooks.
+Repository: <https://github.com/oncoapop/PDX-latency-growth>
+
+Reusable analysis scripts for PDX mouse tumour-volume Excel workbooks: cage-based growth plotting, a passage-specific candidate-selection workflow, and a latency-to-threshold + growth-rate pipeline that cross-checks sample identity and surgery dates against Atlas.
+
+No real source data (workbooks, normalized CSVs, Atlas exports, credentials) is ever committed to this repository — see `.gitignore` and the Safety and provenance section of [AGENT_HANDOFF.md](AGENT_HANDOFF.md). Everything here is code, tests (with synthetic fixtures), and documentation.
 
 The script reads dated `Tumor Volumes*.xlsx` files, extracts tumour measurements by worksheet, mouse/cage ID, tumour model, and tumour site, then generates:
 
@@ -103,3 +107,46 @@ The projection plot shows observed data as solid lines and projected data as das
 The extracted-row CSV is the source-of-truth audit file. It records the source workbook, worksheet, row number, mouse ID, cage, tumour model, tumour site, and extracted volume for each point.
 
 Use this file to verify any plotted point against the original Excel source.
+
+## Portable Agent Workflow
+
+For analysis by another agent, use [AGENT_HANDOFF.md](AGENT_HANDOFF.md). The `agent_tools/` scripts copy Excel, CSV, TSV, and DOCX inputs into an isolated working directory, preserve a source hash manifest, extract content with source locations, and rank unique `SA ID + passage` candidates.
+
+The candidate workflow uses four separate decision signals:
+
+- latency from surgery to 100 mm3
+- tumour take rate per surgery
+- passage-matched ATLAS inventory labelled `VF`
+- spread between fastest and slowest latency to 100 mm3
+
+It does not combine passages or use an unexplained weighted score.
+
+## Latency + growth-rate pipeline for raw cage-based workbooks
+
+For a decade-spanning real data room of year-named (`YYYY`) subfolders of `Tumor Volumes(YYYY.MM.DD)*.xlsx` workbooks, `agent_tools/run_latency_pipeline.py` chains the raw-workbook extraction (`build_growth_measurements_from_raw.py`, which cross-checks surgery dates against Atlas when `~/.atlas` is configured), `rank_candidates.py`, `compute_growth_metrics.py` (per-mouse growth rate and doubling time), `build_latency_and_growth_report.py`, and the two plotting scripts (`plot_latency_and_growth_rate_summary.py`, `plot_growth_curves_by_sa_id.py`) into one command:
+
+```zsh
+.venv/bin/python agent_tools/run_latency_pipeline.py /path/to/workspace /path/to/data-room-folder
+```
+
+Each stage is skipped when its output is already newer than its inputs, and the workbook/Atlas pulls are themselves cached under `<workspace>/.cache/`, so a routine re-run (a few new weekly files added since last time) only redoes what actually changed. Pass `--force` to rerun everything, or `--from-stage <stage>` to force one stage and everything after it.
+
+### Sample identity and passage
+
+`build_growth_measurements_from_raw.py` resolves `sa_id` and `passage` in three tiers, in order: (1) a model name in the workbook's own Comments column; (2) failing that, an empirical crosswalk from Atlas's `patient_id` to a known `SA###` label, built from other animals where both are independently known, used only when unambiguous; (3) failing that too, Atlas's own `patient_id` directly — not the lab's usual naming, but still the authoritative, unique sample identity when Atlas already knows exactly which animal this is. Every row in `growth_measurements.csv` also carries `atlas_patient_id`, `atlas_transplant_id`, and `atlas_barcode` for the exact per-animal sample/tumour ID, plus `sa_id_source`/`passage_source` so you can see which tier resolved it.
+
+### Comparing latency thresholds
+
+`rank_candidates.py`, `build_latency_and_growth_report.py`, and `rank_by_latency_and_growth.py` all accept `--threshold <mm3>` (default 100). A non-default threshold writes to its own `analysis/threshold_<N>/` subdirectory rather than overwriting the default output, so two cutoffs can be compared side by side:
+
+```zsh
+.venv/bin/python agent_tools/rank_candidates.py /path/to/workspace --threshold 200
+.venv/bin/python agent_tools/build_latency_and_growth_report.py /path/to/workspace --threshold 200
+.venv/bin/python agent_tools/rank_by_latency_and_growth.py /path/to/workspace --threshold 200
+```
+
+Or pass `--also-threshold 200` (repeatable) to `run_latency_pipeline.py` to run and checkpoint both thresholds together in one command, so they can't drift out of sync with each other.
+
+### Latency brackets, not bare upper bounds
+
+A mouse's latency-to-threshold is reported as a bracket, not a single number, whenever an earlier measurement exists: `last_known_below_100_date`/`min_latency_days` (the most recent prior reading still below threshold — this can be an explicit 0 mm3, i.e. "checked, not yet palpable") alongside `first_ge_100_date`/the point-estimate `latency_days` (log-linear interpolated when possible). Only an animal with no earlier measurement at all is reported as `left-censored`.

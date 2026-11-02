@@ -17,3 +17,9 @@ min_latest_volume_for_projection: 200
 projection_thresholds_mm3: [500, 1000]
 projection_fit_windows: [5, 4, 3]
 min_projection_r2: 0.5
+
+# Optional local-only XenoDB metadata source. Keep credentials in an ignored
+# config.local.yml, never in this public example config.
+# xenodb_mysql: "/usr/local/mysql/bin/mysql"
+# xenodb_defaults_file: "~/.my.cnf"
+# xenodb_database: "xenodb"
