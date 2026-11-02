@@ -41,6 +41,7 @@ FIT_WINDOWS = (5, 4, 3)
 MIN_PROJECTION_R2 = 0.5
 MIN_LATEST_VOLUME_FOR_PROJECTION = 200.0
 PROJECTION_THRESHOLDS = (500, 1000)
+DUE_SOON_DAYS = 14  # highlight a projected harvest date within this many days
 
 
 def code_version() -> str:
@@ -238,13 +239,6 @@ def annotation_offset(index: int, threshold: int) -> tuple[int, int]:
     return x_offsets[index % len(x_offsets)], y_base + (index // len(x_offsets)) * y_step
 
 
-def threshold_label_offset(series_index: int, threshold: int) -> tuple[int, int]:
-    offsets_500 = [(16, 18), (-24, 18), (30, -22), (-36, -22), (44, 2), (-48, 2), (20, 34), (-24, -38)]
-    offsets_1000 = [(18, -22), (-26, -24), (34, 20), (-40, 20), (50, -4), (-54, -4), (22, -40), (-26, 36)]
-    offsets = offsets_500 if threshold == 500 else offsets_1000
-    return offsets[series_index % len(offsets)]
-
-
 def display_date_label(value: pd.Timestamp) -> str:
     timestamp = pd.Timestamp(value)
     return f"{timestamp.day} {timestamp.strftime('%b')}"
@@ -368,11 +362,15 @@ def collect_latency_label(labels, cage, first_date, first_value, color, censored
     return days
 
 
-def place_latency_labels(ax, labels, min_sep_px: float = 13.0) -> None:
+def place_latency_labels(
+    ax, labels, min_sep_px: float = 13.0, fontsize: float = 7.5, label_offset_px: float = 11.0,
+) -> None:
     """Repel overlapping callouts vertically, the way ggrepel does in R.
 
     Labels are nudged apart in display space and kept inside the axes, so
     traces whose first measurement coincides stay individually readable.
+    A label with `highlight: True` gets a red box drawn around it — used to
+    flag a projected date that falls within the near-term action window.
     """
     if not labels:
         return
@@ -400,7 +398,7 @@ def place_latency_labels(ax, labels, min_sep_px: float = 13.0) -> None:
     placed.sort(key=lambda item: item["py"])
     previous = None
     for item in placed:
-        target = item["py"] + 11
+        target = item["py"] + label_offset_px
         if previous is not None and target < previous + min_sep_px:
             target = previous + min_sep_px
         item["target"] = min(target, top_px - 8)
@@ -409,17 +407,23 @@ def place_latency_labels(ax, labels, min_sep_px: float = 13.0) -> None:
     for item in placed:
         dy_points = (item["target"] - item["py"]) * 72.0 / dpi
         dx_points = -9 if item["inward"] else 9
+        bbox = (
+            {"boxstyle": "round,pad=0.28", "facecolor": "none", "edgecolor": "red", "linewidth": 1.6}
+            if item.get("highlight")
+            else None
+        )
         ax.annotate(
             item["text"],
             (item["x"], item["y"]),
             xytext=(dx_points, dy_points),
             textcoords="offset points",
-            fontsize=7.5,
+            fontsize=fontsize,
             fontweight="bold",
             color=item["color"],
             ha="right" if item["inward"] else "left",
             va="bottom",
             annotation_clip=False,
+            bbox=bbox,
             arrowprops={"arrowstyle": "-", "color": item["color"], "lw": 0.6, "alpha": 0.7},
         )
 
@@ -961,6 +965,7 @@ def plot_pdx_projections(
     y_max = max(1300, float(observed["tumour_volume_mm3"].max()) * 1.18)
 
     colors = plt.get_cmap("tab10")
+    today = pd.Timestamp(generated_date)
     for ax, (cage, sheet, model) in zip(axes.flat, groups):
         group_observed = observed[
             (observed["cage"] == cage)
@@ -974,6 +979,7 @@ def plot_pdx_projections(
         ]
 
         latency_labels: list[dict[str, Any]] = []
+        projection_date_labels: list[dict[str, Any]] = []
         for color_index, (label, trace) in enumerate(group_observed.groupby("trace_label")):
             color = colors(color_index % 10)
             trace = trace.sort_values("date")
@@ -1025,19 +1031,14 @@ def plot_pdx_projections(
                 threshold_date = pd.Timestamp(value)
                 ax.scatter(threshold_date, threshold, color=color, marker=marker, s=45, zorder=5)
                 if threshold == final_label_threshold:
-                    xytext = threshold_label_offset(color_index, threshold)
-                    ax.annotate(
-                        display_date_label(threshold_date),
-                        (threshold_date, threshold),
-                        xytext=xytext,
-                        textcoords="offset points",
-                        fontsize=8,
-                        fontweight="bold",
-                        color=color,
-                        ha="left" if xytext[0] >= 0 else "right",
-                        va="bottom" if xytext[1] >= 0 else "top",
-                        arrowprops={"arrowstyle": "-", "color": color, "lw": 0.5, "alpha": 0.65},
-                    )
+                    days_until = (threshold_date - today).days
+                    projection_date_labels.append({
+                        "x": threshold_date,
+                        "y": threshold,
+                        "text": display_date_label(threshold_date),
+                        "color": color,
+                        "highlight": 0 <= days_until <= DUE_SOON_DAYS,
+                    })
 
         ax.axhline(500, color="#555555", linestyle=":", linewidth=1)
         ax.axhline(1000, color="#222222", linestyle=":", linewidth=1)
@@ -1047,6 +1048,9 @@ def plot_pdx_projections(
         ax.grid(True, alpha=0.25)
         configure_date_axis(ax)
         place_latency_labels(ax, latency_labels)
+        place_latency_labels(
+            ax, projection_date_labels, min_sep_px=20.0, fontsize=12.0, label_offset_px=16.0,
+        )
 
     for ax in axes.flat[len(groups):]:
         ax.axis("off")
