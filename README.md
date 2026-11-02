@@ -150,3 +150,61 @@ Or pass `--also-threshold 200` (repeatable) to `run_latency_pipeline.py` to run 
 ### Latency brackets, not bare upper bounds
 
 A mouse's latency-to-threshold is reported as a bracket, not a single number, whenever an earlier measurement exists: `last_known_below_100_date`/`min_latency_days` (the most recent prior reading still below threshold — this can be an explicit 0 mm3, i.e. "checked, not yet palpable") alongside `first_ge_100_date`/the point-estimate `latency_days` (log-linear interpolated when possible). Only an animal with no earlier measurement at all is reported as `left-censored`.
+
+## Weekly living-mouse report, and scheduling it
+
+`agent_tools/weekly_growth_report.py` reads the already-extracted `<workspace>/normalized/growth_measurements.csv` (fast — no raw-workbook rescan) and writes, under `<workspace>/weekly_report/`:
+
+- `living_mice_growth_latest.png` — tumour growth by cage, for every mouse measured within the last 10 days ("living"), with any mouse flagged (dashed red) that has never reached 100 mm3 more than 90 days after surgery
+- `flagged_no_take_latest.csv` — the flagged-mice table
+- `pdx_growth_projection_latest.png` / `.csv` — current harvest-date projection (500/1000 mm3) for every actively-growing mouse above 200 mm3, reusing `plot_tumour_growth_by_cage.py`'s own projection logic
+
+```zsh
+.venv/bin/python agent_tools/weekly_growth_report.py --workspace /path/to/workspace
+```
+
+`agent_tools/post_weekly_report_to_confluence.py` then uploads both PNGs to a Confluence page as real attachments, via the Confluence REST API directly (there is no file-attachment tool in the Atlassian MCP connector, only page-text read/write):
+
+```zsh
+.venv/bin/python agent_tools/post_weekly_report_to_confluence.py <pageId> \
+  /path/to/workspace/weekly_report/living_mice_growth_latest.png \
+  /path/to/workspace/weekly_report/pdx_growth_projection_latest.png
+```
+
+This needs `~/.confluence_api_token` (chmod 600), a classic (not scoped) Atlassian API token — create one at https://id.atlassian.com/manage-profile/security/api-tokens:
+
+```
+CONFLUENCE_EMAIL = you@example.com
+CONFLUENCE_API_TOKEN = <your token>
+```
+
+It prints each uploaded file's `fileId` and `collection` — **every re-upload gets a brand-new `fileId`**, so whatever edits the Confluence page body afterwards must re-point each `<figure data-type="media-single">` embed's `data-id` at this run's fresh value, not reuse last week's.
+
+### Option A: a Claude Code scheduled task (what this repo actually uses)
+
+The weekly Confluence update needs more than running two scripts — it also rewrites page text (counts, the flagged-mice table, the projection table, the embedded images' fileIds), which means an agent has to read each script's output and edit the page, not just shell out. That's done with Claude Code's own scheduled-tasks feature, not a Unix cron job:
+
+```
+/scheduled-tasks  (or ask an agent to use the create_scheduled_task tool)
+```
+
+The task here is `pdx-weekly-growth-report`, cron `0 9 * * 1` (Mondays ~9am, local time), stored at `~/.claude/scheduled-tasks/pdx-weekly-growth-report/SKILL.md`. Its prompt runs both scripts above, reads their output, and updates the Confluence page (pageId, URL, and exact steps are all in that prompt — it's self-contained, no memory of any prior conversation needed). List/edit/pause it with the `list_scheduled_tasks` / `update_scheduled_task` tools, or from the app's "Scheduled" sidebar section.
+
+Caveat: this only runs while the Claude Code app is open — if it's closed when the task is due, it runs on next launch instead. Click "Run now" once after creating or editing a scheduled task, so tool approvals (Confluence, file access) get recorded and later automatic runs don't pause on a permission prompt.
+
+### Option B: a real OS cron job (plots + attachments only, no page-text edit)
+
+If you just want the two PNGs regenerated and re-uploaded to Confluence on a schedule — without the page's text/tables/date also updating — a plain `crontab` entry works, since both scripts are non-interactive:
+
+```zsh
+crontab -e
+```
+
+```cron
+# Every Monday at 9am: regenerate the weekly PDX growth report and push the
+# plots to Confluence (page text/tables are not updated by this — that part
+# needs Option A above).
+0 9 * * 1 cd "/Users/dyap/Documents/Tasks workflow/PDX-growth-tracking" && .venv/bin/python agent_tools/weekly_growth_report.py --workspace outputs/room134-aparicio-sam-latency >> /tmp/pdx-weekly-report.log 2>&1 && .venv/bin/python agent_tools/post_weekly_report_to_confluence.py 3560767511 outputs/room134-aparicio-sam-latency/weekly_report/living_mice_growth_latest.png outputs/room134-aparicio-sam-latency/weekly_report/pdx_growth_projection_latest.png >> /tmp/pdx-weekly-report.log 2>&1
+```
+
+Requires `~/.confluence_api_token` to already exist (see above) and the Mac to be awake/logged in at that time — `cron` does not wake a sleeping machine. Check `/tmp/pdx-weekly-report.log` for output. Since this path doesn't update the Confluence page body, the embedded images will keep showing an older `fileId` reference unless something else re-points them — Option A is the complete, hands-off version; this option is a fallback for keeping the attachments themselves current.
