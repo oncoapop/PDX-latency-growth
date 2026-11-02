@@ -194,9 +194,27 @@ def read_workbook_rows(path: Path, include_zero: bool = True) -> list[dict[str, 
     return rows
 
 
+WORKBOOK_GLOB_PATTERNS = (
+    "Tumor Volumes(*.xlsx",   # 2024 onward: "Tumor Volumes(2024.10.01)TA.xlsx"
+    "Tumor Volumes (*.xlsx",  # 2017-2024: "Tumor Volumes (2017.01.19)-SL.xlsx"
+)
+
+
+def find_workbooks(year_dir: Path) -> list[Path]:
+    """Earlier years used "Tumor Volumes (...)" with a space before the
+    parenthesis; later years dropped the space. Matching only one pattern
+    silently skipped every workbook using the other convention — confirmed
+    to have excluded all of 2017-2023 (and part of 2024) before this fix."""
+    seen: set[Path] = set()
+    for pattern in WORKBOOK_GLOB_PATTERNS:
+        seen.update(year_dir.rglob(pattern))
+    return sorted(seen)
+
+
 def read_all_raw_rows(source_root: Path, cache_path: Path | None = None) -> list[dict[str, Any]]:
     """Extract every row from every Tumor Volumes(*.xlsx workbook under the
-    year folders. When cache_path is given, a workbook already in the cache
+    year folders (see find_workbooks() for the filename conventions
+    matched). When cache_path is given, a workbook already in the cache
     with an unchanged (mtime, size) is reused instead of re-parsed — this is
     what makes a routine re-run (a handful of new weekly files added since
     last time) fast instead of re-reading a decade of workbooks every time."""
@@ -204,7 +222,7 @@ def read_all_raw_rows(source_root: Path, cache_path: Path | None = None) -> list
     raw_rows: list[dict[str, Any]] = []
     hits = misses = 0
     for year_dir in find_year_dirs(source_root):
-        for path in sorted(year_dir.rglob("Tumor Volumes(*.xlsx")):
+        for path in find_workbooks(year_dir):
             if path.name.startswith("~$"):
                 continue
             if cache_path:

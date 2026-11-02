@@ -9,6 +9,7 @@ from agent_tools.atlas_client import AnimalAtlasRecord, CageSurgeryDate
 from agent_tools.build_growth_measurements_from_raw import (
     build_normalized_rows,
     build_patient_id_to_sa_id_crosswalk,
+    find_workbooks,
     find_year_dirs,
     read_all_raw_rows,
     resolve_surgery_date,
@@ -53,6 +54,26 @@ class BuildGrowthMeasurementsTests(unittest.TestCase):
             (root / "Pilot Study 2026").mkdir()
             names = {p.name for p in find_year_dirs(root)}
             self.assertEqual(names, {"2024", "2025"})
+
+    def test_find_workbooks_matches_both_filename_conventions(self) -> None:
+        # Confirmed on the real data: 2017-2023 (and part of 2024) used
+        # "Tumor Volumes (...)" with a space before the parenthesis; 2024
+        # onward dropped it. Matching only one pattern silently skipped
+        # every workbook using the other convention.
+        with tempfile.TemporaryDirectory() as tmp:
+            year_dir = Path(tmp) / "2017"
+            (year_dir / "1. Jan").mkdir(parents=True)
+            (year_dir / "1. Jan" / "Tumor Volumes (2017.01.19)-SL.xlsx").write_text("x")
+            (year_dir / "1. Jan" / "Tumor Volumes(2017.01.23)SL.xlsx").write_text("x")
+            (year_dir / "1. Jan" / "~$Tumor Volumes (2017.01.19)-SL.xlsx").write_text("x")
+            found = {p.name for p in find_workbooks(year_dir)}
+            # The glob patterns anchor at the start of the filename, so an
+            # Excel lock file (~$...) is naturally excluded without needing
+            # a separate filter.
+            self.assertEqual(
+                found,
+                {"Tumor Volumes (2017.01.19)-SL.xlsx", "Tumor Volumes(2017.01.23)SL.xlsx"},
+            )
 
     def test_converter_resolves_sa_id_and_passage_across_weeks_and_flags_unmapped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
