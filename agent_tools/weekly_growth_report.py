@@ -34,12 +34,19 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from plot_tumour_growth_by_cage import (  # noqa: E402
-    build_pdx_projections, classify_project, draw_project_legend, plot_pdx_projections,
+    build_pdx_projections, classify_project, draw_project_legend_panel, plot_pdx_projections,
 )
 
 LIVING_WINDOW_DAYS = 10
 NO_TAKE_THRESHOLD_MM3 = 100.0
 NO_TAKE_FLAG_DAYS = 90
+
+# All text on these plots is sized relative to the cage-ID title, which must
+# stay readable at a glance — nothing else should be noticeably smaller.
+CAGE_TITLE_FONTSIZE = 18
+AXIS_LABEL_FONTSIZE = 14
+TICK_LABEL_FONTSIZE = 13
+MOUSE_LEGEND_FONTSIZE = 13
 
 
 def load_measurements(workspace: Path) -> pd.DataFrame:
@@ -75,9 +82,13 @@ def plot_living_mice(df: pd.DataFrame, status: pd.DataFrame, output_png: Path, a
     flagged_ids = set(status.loc[status["no_take_flag"], "mouse_id"])
     data = df[df["mouse_id"].isin(living_ids)].sort_values(["cage", "mouse_id", "measurement_date"])
     cages = sorted(data["cage"].unique())
-    n_cols = min(3, max(1, len(cages)))
-    n_rows = math.ceil(len(cages) / n_cols)
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.4 * n_cols, 4.0 * n_rows), squeeze=False)
+    # Reserve one extra grid slot, sized the same as a cage subplot, for the
+    # project-color legend — a thin text strip above the plots is unreadable
+    # at the sizes requested here.
+    n_slots = len(cages) + 1
+    n_cols = min(3, max(1, n_slots))
+    n_rows = math.ceil(n_slots / n_cols)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6.2 * n_cols, 4.8 * n_rows), squeeze=False)
 
     for ax, cage in zip(axes.flat, cages):
         cage_data = data[data["cage"] == cage]
@@ -90,31 +101,33 @@ def plot_living_mice(df: pd.DataFrame, status: pd.DataFrame, output_png: Path, a
                 linewidth=2.2 if flagged else 1.6,
                 color="crimson" if flagged else None,
                 linestyle="--" if flagged else "-",
-                label=f"{mouse_id}{' ⚠ no take >90d' if flagged else ''}",
+                label=f"{mouse_id}{' ⚠ no take' if flagged else ''}",
             )
         ax.axhline(NO_TAKE_THRESHOLD_MM3, color="#999999", linestyle=":", linewidth=1)
         _, project_color = classify_project(cage)
-        ax.set_title(f"Cage {cage}", fontsize=15, fontweight="bold", color=project_color)
-        ax.set_ylabel("Tumour volume (mm3)")
+        ax.set_title(f"Cage {cage}", fontsize=CAGE_TITLE_FONTSIZE, fontweight="bold", color=project_color)
+        ax.set_ylabel("Tumour volume (mm3)", fontsize=AXIS_LABEL_FONTSIZE)
+        ax.set_xlabel("Date", fontsize=AXIS_LABEL_FONTSIZE)
         ax.grid(True, alpha=0.25)
-        ax.legend(fontsize=7, frameon=False)
+        ax.legend(fontsize=MOUSE_LEGEND_FONTSIZE, frameon=False)
         locator = mdates.AutoDateLocator(minticks=3, maxticks=6)
         ax.xaxis.set_major_locator(locator)
         ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
-        ax.tick_params(axis="x", labelrotation=30, labelsize=8)
+        ax.tick_params(axis="x", labelrotation=30, labelsize=TICK_LABEL_FONTSIZE)
+        ax.tick_params(axis="y", labelsize=TICK_LABEL_FONTSIZE)
 
-    for ax in axes.flat[len(cages):]:
+    draw_project_legend_panel(axes.flat[len(cages)], fontsize=CAGE_TITLE_FONTSIZE)
+    for ax in axes.flat[len(cages) + 1:]:
         ax.axis("off")
 
-    fig.suptitle(f"Living mice — tumour growth by cage (as of {as_of:%Y-%m-%d})", fontsize=15, y=0.995)
+    fig.suptitle(f"Living mice — tumour growth by cage (as of {as_of:%Y-%m-%d})", fontsize=20, y=0.998)
     fig.text(
         0.5, 0.975,
         f"{len(living_ids)} living mice across {len(cages)} cages | "
         f"dashed red = no tumour ≥{NO_TAKE_THRESHOLD_MM3:g}mm3 after {NO_TAKE_FLAG_DAYS}+ days",
-        ha="center", va="top", fontsize=10,
+        ha="center", va="top", fontsize=14,
     )
-    draw_project_legend(fig, y=0.96)
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     fig.savefig(output_png, dpi=200, bbox_inches="tight")
     plt.close(fig)
 

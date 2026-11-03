@@ -43,6 +43,14 @@ MIN_LATEST_VOLUME_FOR_PROJECTION = 200.0
 PROJECTION_THRESHOLDS = (500, 1000)
 DUE_SOON_DAYS = 14  # highlight a projected harvest date within this many days
 
+# Text sizing for the weekly report plots: everything is sized relative to
+# the cage-ID title, which has to stay readable at a glance.
+CAGE_TITLE_FONTSIZE = 18
+SA_ID_FONTSIZE = 16
+SUBTITLE_FONTSIZE = 11
+AXIS_LABEL_FONTSIZE = 14
+TICK_LABEL_FONTSIZE = 13
+
 
 def code_version() -> str:
     """Short git description of the code that drew a figure."""
@@ -219,7 +227,7 @@ def numeric(value: Any) -> float | None:
     return float(number)
 
 
-def configure_date_axis(ax: plt.Axes, max_ticks: int = 6) -> None:
+def configure_date_axis(ax: plt.Axes, max_ticks: int = 6, labelsize: float = 8) -> None:
     locator = mdates.AutoDateLocator(minticks=3, maxticks=max_ticks)
     formatter = mdates.ConciseDateFormatter(locator)
     formatter.formats = ["%Y", "%b", "%d", "%H:%M", "%H:%M", "%S.%f"]
@@ -227,7 +235,7 @@ def configure_date_axis(ax: plt.Axes, max_ticks: int = 6) -> None:
     formatter.offset_formats = ["", "", "", "", "", ""]
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(formatter)
-    ax.tick_params(axis="x", labelrotation=30, labelsize=8)
+    ax.tick_params(axis="x", labelrotation=30, labelsize=labelsize)
     for label in ax.get_xticklabels():
         label.set_horizontalalignment("right")
 
@@ -281,17 +289,20 @@ def classify_project(cage: Any) -> tuple[str, str]:
     return DEFAULT_PROJECT_NAME, DEFAULT_PROJECT_COLOR
 
 
-def draw_project_legend(fig: plt.Figure, y: float) -> None:
-    """One line of project-name labels, each in its cage-title color."""
+def draw_project_legend_panel(ax: plt.Axes, fontsize: float = 18.0) -> None:
+    """Render the project-color key inside its own subplot-sized panel,
+    rather than a thin text strip — readable at the same size as a cage
+    title, and occupying one full grid slot like any other subplot."""
     entries = [(DEFAULT_PROJECT_NAME, DEFAULT_PROJECT_COLOR)] + [
         (name, color) for _, name, color in PROJECT_PREFIX_RULES
     ]
-    gap = 0.025
-    widths = [0.015 + 0.011 * len(name) for name, _ in entries]
-    cursor = 0.5 - (sum(widths) + gap * (len(entries) - 1)) / 2
-    for (name, color), width in zip(entries, widths):
-        fig.text(cursor, y, name, color=color, fontsize=9.5, fontweight="bold", ha="left", va="top")
-        cursor += width + gap
+    ax.axis("off")
+    ax.set_title("Project", fontsize=fontsize, fontweight="bold")
+    n = len(entries)
+    for index, (name, color) in enumerate(entries):
+        y = 0.82 - index * (0.6 / max(1, n - 1)) if n > 1 else 0.5
+        ax.text(0.06, y, "●", color=color, fontsize=fontsize * 1.3, va="center", ha="left", transform=ax.transAxes)
+        ax.text(0.22, y, name, color=color, fontsize=fontsize, fontweight="bold", va="center", ha="left", transform=ax.transAxes)
 
 
 def latency_days(cage: Any, first_measurement: Any) -> int | None:
@@ -986,12 +997,16 @@ def plot_pdx_projections(
         return
 
     groups = sorted(observed[["cage", "sheet", "tumour_model"]].drop_duplicates().itertuples(index=False, name=None))
-    n_cols = min(3, len(groups))
-    n_rows = math.ceil(len(groups) / n_cols)
+    # Reserve one extra grid slot, the same size as a cage subplot, for the
+    # project-color legend, and extra height per row for the larger stacked
+    # cage/SA-ID/transplant-date title.
+    n_slots = len(groups) + 1
+    n_cols = min(3, n_slots)
+    n_rows = math.ceil(n_slots / n_cols)
     fig, axes = plt.subplots(
         n_rows,
         n_cols,
-        figsize=(7.0 * n_cols, 5.0 * n_rows + 0.8),
+        figsize=(7.4 * n_cols, 5.8 * n_rows + 0.8),
         sharex=False,
         sharey=True,
         squeeze=False,
@@ -1077,38 +1092,47 @@ def plot_pdx_projections(
         ax.axhline(500, color="#555555", linestyle=":", linewidth=1)
         ax.axhline(1000, color="#222222", linestyle=":", linewidth=1)
         _, project_color = classify_project(cage)
+        transplant = parse_transplant_date(cage)
+        subtitle = f"{sheet} source" + (f" | transplanted {transplant:%Y-%m-%d}" if transplant is not None else "")
         ax.text(
-            0.0, 1.16, f"Cage {cage}", transform=ax.transAxes,
-            fontsize=15, fontweight="bold", color=project_color, ha="left", va="bottom",
+            0.0, 1.32, f"Cage {cage}", transform=ax.transAxes,
+            fontsize=CAGE_TITLE_FONTSIZE, fontweight="bold", color=project_color, ha="left", va="bottom",
         )
-        ax.set_title(f"{model} ({sheet}){transplant_title_suffix(cage)}", fontsize=9, pad=24)
-        ax.set_ylabel("Tumour volume (mm3)")
+        ax.text(
+            0.0, 1.14, model, transform=ax.transAxes,
+            fontsize=SA_ID_FONTSIZE, fontweight="bold", color="#1a1a1a", ha="left", va="bottom",
+        )
+        ax.text(
+            0.0, 1.01, subtitle, transform=ax.transAxes,
+            fontsize=SUBTITLE_FONTSIZE, color="#555555", ha="left", va="bottom",
+        )
+        ax.set_ylabel("Tumour volume (mm3)", fontsize=AXIS_LABEL_FONTSIZE)
+        ax.set_xlabel("Date", fontsize=AXIS_LABEL_FONTSIZE)
         ax.set_ylim(0, y_max)
         ax.grid(True, alpha=0.25)
-        configure_date_axis(ax)
-        place_latency_labels(ax, latency_labels)
+        configure_date_axis(ax, labelsize=TICK_LABEL_FONTSIZE)
+        ax.tick_params(axis="y", labelsize=TICK_LABEL_FONTSIZE)
+        place_latency_labels(ax, latency_labels, fontsize=TICK_LABEL_FONTSIZE)
         place_latency_labels(
-            ax, projection_date_labels, min_sep_px=20.0, fontsize=12.0, label_offset_px=16.0,
+            ax, projection_date_labels, min_sep_px=22.0, fontsize=CAGE_TITLE_FONTSIZE * 0.85, label_offset_px=18.0,
         )
 
-    for ax in axes.flat[len(groups):]:
+    draw_project_legend_panel(axes.flat[len(groups)], fontsize=CAGE_TITLE_FONTSIZE)
+    for ax in axes.flat[len(groups) + 1:]:
         ax.axis("off")
-    for ax in list(axes.flat)[:len(groups)]:
-        ax.set_xlabel("Date", fontsize=9)
 
-    fig.suptitle("Current PDX Growth Projection for Volume >200 mm3", fontsize=15, y=0.98)
+    fig.suptitle("Current PDX Growth Projection for Volume >200 mm3", fontsize=20, y=0.995)
     fig.text(
         0.5,
-        0.925,
+        0.965,
         f"Measured on {latest_measurement_date} | Solid = observed | Dashed = projected | "
         f"callout = days transplant \u2192 first record (\u2265 = censored) | "
         f"Generated {generated_date}{version_suffix()}",
         ha="center",
         va="top",
-        fontsize=10,
+        fontsize=14,
     )
-    draw_project_legend(fig, y=0.9)
-    fig.tight_layout(rect=(0, 0, 1, 0.87))
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
     fig.savefig(output_png, dpi=300, bbox_inches="tight")
     fig.savefig(output_pdf, bbox_inches="tight")
     plt.close(fig)
