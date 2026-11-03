@@ -260,6 +260,40 @@ def parse_transplant_date(cage: Any) -> pd.Timestamp | None:
         return None
 
 
+# Cage-ID letter prefix identifies which project a tumour belongs to (same
+# convention parse_transplant_date already strips to find the YYMMDD date).
+# Longer prefixes are checked first so "OS..." isn't swallowed by the "O" rule.
+PROJECT_PREFIX_RULES = (
+    ("OS", "Osteosarcoma", "#8e44ad"),
+    ("PE", "Lenti-Crispr", "#16a085"),
+    ("O", "Organoid Study", "#d35400"),
+)
+DEFAULT_PROJECT_NAME = "Xenograft"
+DEFAULT_PROJECT_COLOR = "#1a1a1a"
+
+
+def classify_project(cage: Any) -> tuple[str, str]:
+    """(project name, title color) inferred from a cage ID's letter prefix."""
+    text = as_text(cage).upper()
+    for prefix, name, color in PROJECT_PREFIX_RULES:
+        if text.startswith(prefix):
+            return name, color
+    return DEFAULT_PROJECT_NAME, DEFAULT_PROJECT_COLOR
+
+
+def draw_project_legend(fig: plt.Figure, y: float) -> None:
+    """One line of project-name labels, each in its cage-title color."""
+    entries = [(DEFAULT_PROJECT_NAME, DEFAULT_PROJECT_COLOR)] + [
+        (name, color) for _, name, color in PROJECT_PREFIX_RULES
+    ]
+    gap = 0.025
+    widths = [0.015 + 0.011 * len(name) for name, _ in entries]
+    cursor = 0.5 - (sum(widths) + gap * (len(entries) - 1)) / 2
+    for (name, color), width in zip(entries, widths):
+        fig.text(cursor, y, name, color=color, fontsize=9.5, fontweight="bold", ha="left", va="top")
+        cursor += width + gap
+
+
 def latency_days(cage: Any, first_measurement: Any) -> int | None:
     """Days from transplant (encoded in the cage ID) to first recorded tumour volume."""
     transplant = parse_transplant_date(cage)
@@ -1042,7 +1076,12 @@ def plot_pdx_projections(
 
         ax.axhline(500, color="#555555", linestyle=":", linewidth=1)
         ax.axhline(1000, color="#222222", linestyle=":", linewidth=1)
-        ax.set_title(f"Cage {cage} {model} ({sheet}){transplant_title_suffix(cage)}", fontsize=11)
+        _, project_color = classify_project(cage)
+        ax.text(
+            0.0, 1.16, f"Cage {cage}", transform=ax.transAxes,
+            fontsize=15, fontweight="bold", color=project_color, ha="left", va="bottom",
+        )
+        ax.set_title(f"{model} ({sheet}){transplant_title_suffix(cage)}", fontsize=9, pad=24)
         ax.set_ylabel("Tumour volume (mm3)")
         ax.set_ylim(0, y_max)
         ax.grid(True, alpha=0.25)
@@ -1068,6 +1107,7 @@ def plot_pdx_projections(
         va="top",
         fontsize=10,
     )
+    draw_project_legend(fig, y=0.9)
     fig.tight_layout(rect=(0, 0, 1, 0.87))
     fig.savefig(output_png, dpi=300, bbox_inches="tight")
     fig.savefig(output_pdf, bbox_inches="tight")

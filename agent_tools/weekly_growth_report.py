@@ -33,7 +33,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from plot_tumour_growth_by_cage import build_pdx_projections, plot_pdx_projections  # noqa: E402
+from plot_tumour_growth_by_cage import (  # noqa: E402
+    build_pdx_projections, classify_project, draw_project_legend, plot_pdx_projections,
+)
 
 LIVING_WINDOW_DAYS = 10
 NO_TAKE_THRESHOLD_MM3 = 100.0
@@ -91,7 +93,8 @@ def plot_living_mice(df: pd.DataFrame, status: pd.DataFrame, output_png: Path, a
                 label=f"{mouse_id}{' ⚠ no take >90d' if flagged else ''}",
             )
         ax.axhline(NO_TAKE_THRESHOLD_MM3, color="#999999", linestyle=":", linewidth=1)
-        ax.set_title(f"Cage {cage}", fontsize=11)
+        _, project_color = classify_project(cage)
+        ax.set_title(f"Cage {cage}", fontsize=15, fontweight="bold", color=project_color)
         ax.set_ylabel("Tumour volume (mm3)")
         ax.grid(True, alpha=0.25)
         ax.legend(fontsize=7, frameon=False)
@@ -110,7 +113,8 @@ def plot_living_mice(df: pd.DataFrame, status: pd.DataFrame, output_png: Path, a
         f"dashed red = no tumour ≥{NO_TAKE_THRESHOLD_MM3:g}mm3 after {NO_TAKE_FLAG_DAYS}+ days",
         ha="center", va="top", fontsize=10,
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.955))
+    draw_project_legend(fig, y=0.96)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
     fig.savefig(output_png, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
