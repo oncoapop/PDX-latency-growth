@@ -56,7 +56,8 @@ def write_summary_csv(df: pd.DataFrame, output_csv: Path) -> pd.DataFrame:
         min_passage=("passage", "min"),
         max_passage=("passage", "max"),
     ).reset_index()
-    summary["mean_latency_days"] = summary["mean_latency_days"].round(1)
+    for column in ["min_latency_days", "mean_latency_days", "max_latency_days"]:
+        summary[column] = summary[column].round(1)
     summary = summary.sort_values("min_latency_days")
     summary.to_csv(output_csv, index=False)
     return summary
